@@ -1605,6 +1605,185 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.set_rc(9, 2000)
         self.wait_mode('FBWA')
 
+    def Standby(self):
+        '''test standby (ride-along) support for redundant flight controllers'''
+        standby_aux_function = 76
+        standby_enable_event = 74   # LogEvent::STANDBY_ENABLE
+        self.set_parameters({
+            "RC7_OPTION": standby_aux_function,
+            # a disturbance source, so the controllers have something to
+            # wind up against:
+            "SIM_WIND_SPD": 8,
+            "SIM_WIND_DIR": 45,
+        })
+
+        self.wait_ready_to_arm()
+        self.takeoff(alt=100)
+        self.change_mode('LOITER')
+
+        self.progress("Letting the controllers wind up in normal flight")
+        self.delay_sim_time(20, "winding up the controllers")
+        normal_flight_text = "normal-flight"
+        self.send_statustext(normal_flight_text)
+        self.delay_sim_time(15, "sampling normal flight")
+
+        self.progress("Engaging standby")
+        self.context_collect('STATUSTEXT')
+        self.set_rc(7, 2000)
+        self.wait_statustext("Stand By Enabled", check_context=True)
+        self.context_stop_collecting('STATUSTEXT')
+        standby_text = "standby-engaged"
+        self.send_statustext(standby_text)
+        self.delay_sim_time(20, "sampling while standing by")
+
+        self.progress("Releasing standby")
+        self.context_collect('STATUSTEXT')
+        self.set_rc(7, 1000)
+        self.wait_statustext("Stand By Disabled", check_context=True)
+        self.context_stop_collecting('STATUSTEXT')
+        standby_released_text = "standby-released"
+        self.send_statustext(standby_released_text)
+        self.delay_sim_time(10, "settling after standby release")
+
+        log_filepath = self.current_onboard_log_filepath()
+        # terminate in-flight, both to close the log and so that the
+        # checks below aren't fooled by the flying-home data:
+        self.reboot_sitl(force=True)
+
+        self.progress("Inspecting the onboard log")
+        dfreader = self.dfreader_for_path(log_filepath)
+
+        # NOTE: DFReader caches the message-type filter from the first
+        # recv_match() call, so this single scan has to ask for everything it
+        # will ever want up front.
+        scan_types = ['MSG', 'EV', 'RCOU', 'PIDR', 'PIDP']
+        markers = {
+            "SRC=250/250:" + normal_flight_text: 'normal',
+            "SRC=250/250:" + standby_text: 'standby',
+            "SRC=250/250:" + standby_released_text: 'after',
+        }
+
+        def new_window():
+            return {'max_i': {}, 'count': {}, 'rcou': {}, 'events': []}
+
+        windows = {}
+        current = None
+        while True:
+            m = dfreader.recv_match(type=scan_types)
+            if m is None:
+                break
+            mtype = m.get_type()
+            if mtype == 'MSG':
+                name = markers.get(m.Message)
+                if name is not None:
+                    current = name
+                    windows.setdefault(current, new_window())
+                continue
+            if current is None:
+                continue
+            w = windows[current]
+            if mtype == 'EV':
+                w['events'].append(m.Id)
+            elif mtype == 'RCOU':
+                for chan in 'C1', 'C2':
+                    value = getattr(m, chan)
+                    (lo, hi) = w['rcou'].get(chan, (value, value))
+                    w['rcou'][chan] = (min(lo, value), max(hi, value))
+            else:
+                w['max_i'][mtype] = max(w['max_i'].get(mtype, 0), abs(m.I))
+                w['count'][mtype] = w['count'].get(mtype, 0) + 1
+
+        for name in 'normal', 'standby':
+            if name not in windows:
+                raise NotAchievedException("No %s window found in log" % name)
+        normal = windows['normal']
+        standby = windows['standby']
+        self.progress("normal-flight  max|I|=%s rcou=%s" % (str(normal['max_i']), str(normal['rcou'])))
+        self.progress("during-standby max|I|=%s rcou=%s" % (str(standby['max_i']), str(standby['rcou'])))
+
+        # the enable event is logged between the normal-flight marker and the
+        # standby-engaged marker:
+        if standby_enable_event not in normal['events']:
+            raise NotAchievedException("Did not see STANDBY_ENABLE event in log")
+
+        for pid in 'PIDR', 'PIDP':
+            if standby['count'].get(pid, 0) < 50:
+                raise NotAchievedException("Too few %s messages while in standby (%u)" %
+                                           (pid, standby['count'].get(pid, 0)))
+            # the controllers keep running while in standby, so the I term is
+            # not exactly zero - but it can only ever hold a single scheduler
+            # period of integration:
+            if standby['max_i'][pid] > 0.1:
+                raise NotAchievedException("%s I term not flushed while in standby (%f)" %
+                                           (pid, standby['max_i'][pid]))
+            # ...and it must be much smaller than what normal flight builds up,
+            # otherwise this test is not proving anything:
+            if normal['max_i'].get(pid, 0) < 3 * standby['max_i'][pid]:
+                raise NotAchievedException(
+                    "%s I term did not wind up in normal flight (%f vs %f in standby)" %
+                    (pid, normal['max_i'].get(pid, 0), standby['max_i'][pid]))
+
+        # standby flushes accumulated state, it does not stop the control
+        # loops, so the surfaces must still be moving:
+        for chan in 'C1', 'C2':
+            if chan not in standby['rcou']:
+                raise NotAchievedException("No RCOU %s while in standby" % chan)
+            (lo, hi) = standby['rcou'][chan]
+            if hi - lo < 5:
+                raise NotAchievedException("Servo %s did not move while in standby (%u..%u)" %
+                                           (chan, lo, hi))
+
+    def StandbyParachute(self):
+        '''check standby leaves the parachute sink rate debounce re-armed'''
+        # The sink rate is fed to the parachute library from update_alt(), which
+        # keeps running while standing by. If the standby path simply skipped
+        # check_sink_rate(), _sink_time_ms would latch there and stay latched, so
+        # the one second debounce would be long expired the moment standby is
+        # released - firing the parachute instantly rather than after a second of
+        # sustained fast sink.
+        self.set_rc(9, 1000)
+        self.set_parameters({
+            "CHUTE_ENABLED": 1,
+            "CHUTE_TYPE": 10,
+            "SERVO9_FUNCTION": 27,
+            "SIM_PARA_ENABLE": 1,
+            "SIM_PARA_PIN": 9,
+            "CHUTE_CRT_SINK": 5,
+            "RC7_OPTION": 76,
+        })
+
+        self.takeoff(alt=300)
+
+        self.progress("Asserting standby")
+        self.set_rc(7, 2000)
+        self.wait_statustext("Stand By Enabled", timeout=10)
+
+        self.progress("Diving hard while standing by")
+        self.set_rc(2, 2000)
+        # the sink must actually exceed CHUTE_CRT_SINK while standing by,
+        # otherwise the latched timer this test is about never gets armed
+        self.wait_climbrate(-60, -7, timeout=30)
+        self.delay_sim_time(8, "sustaining the fast sink while standing by")
+
+        # release while STILL sinking fast: the debounce must restart from now
+        self.progress("Releasing standby while still sinking fast")
+        self.set_rc(7, 1000)
+        self.wait_statustext("Stand By Disabled", timeout=10)
+        released_at = self.get_sim_time()
+
+        self.wait_statustext("BANG", timeout=30)
+        debounce = self.get_sim_time() - released_at
+        self.progress("parachute fired %.2fs after standby was released" % debounce)
+        # measured in SITL: ~1.8s with the debounce correctly re-armed, ~0.6s
+        # without it (the check fires on the first cycle after release)
+        if debounce < 1.2:
+            raise NotAchievedException(
+                "parachute fired %.2fs after standby release; the one second sink "
+                "rate debounce was not re-armed during standby" % debounce)
+
+        self.disarm_vehicle(force=True)
+        self.reboot_sitl()
+
     def FenceStatic(self):
         '''Test Basic Fence Functionality'''
         self.progress("Checking for bizarre healthy-when-not-present-or-enabled")
@@ -9101,6 +9280,8 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.NoArmWithoutMissionItems,
             self.RudderArmedTakeoffRequiresNeutralThrottle,
             self.MODE_SWITCH_RESET,
+            self.Standby,
+            self.StandbyParachute,
             self.ExternalPositionEstimate,
             self.SagetechMXS,
             self.MAV_CMD_GUIDED_CHANGE_ALTITUDE,
