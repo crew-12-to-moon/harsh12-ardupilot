@@ -21,3 +21,12 @@ void ModeCircle::update()
     plane.calc_throttle();
 }
 
+
+/*
+  keep the circle centre under the aircraft while standing by, for the same
+  reason as LOITER: it is captured from current_loc on entry.
+ */
+void ModeCircle::standby_reset()
+{
+    plane.next_WP_loc = plane.current_loc;
+}

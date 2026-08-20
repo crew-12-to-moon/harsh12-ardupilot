@@ -7,8 +7,27 @@
 void Plane::parachute_check()
 {
 #if HAL_PARACHUTE_ENABLED
+    // update() is deliberately still called while standing by: it drives the
+    // release output state machine and has no sink rate trigger of its own.
+    // Suspending it would collapse a release commanded over RC or MAVLink
+    // during standby into a single 100ms output pulse.
     parachute.update();
-    parachute.check_sink_rate();
+
+    if (standby_active) {
+        // Don't run the sink rate check while standing by: it compares this
+        // controller's intent against sensed motion, which is meaningless
+        // while another controller is flying the aircraft.
+        //
+        // Feed a sub-critical sink rate rather than simply skipping the check.
+        // set_sink_rate() is also called from update_alt(), which keeps running
+        // while we are standing by, so _sink_time_ms latches there and stays
+        // latched. The one second debounce inside check_sink_rate() would then
+        // be long expired the moment standby is released, releasing the
+        // parachute immediately. A sub-critical rate re-arms that debounce.
+        parachute.set_sink_rate(0);
+    } else {
+        parachute.check_sink_rate();
+    }
 #endif
 }
 
