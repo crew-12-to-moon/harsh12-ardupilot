@@ -1907,6 +1907,12 @@ void QuadPlane::update_throttle_hover()
     if (!available()) {
         return;
     }
+
+    if (plane.standby_active) {
+        // don't learn the hover throttle while riding along: this controller
+        // is not driving the motors
+        return;
+    }
     
     // if not armed or landed exit
     if (!motors->armed() || !is_flying_vtol()) {
