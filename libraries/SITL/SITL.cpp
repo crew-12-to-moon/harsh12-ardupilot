@@ -544,7 +544,7 @@ const AP_Param::GroupInfo SIM::var_info3[] = {
 
     // @Param{Sub}: BUOYANCY
     // @DisplayName: Buoyancy
-    // @Description: Buyoancy for submarines
+    // @Description: Net buoyancy force (in Newtons). 0 is neutrally buoyant, negative means the vehicle sinks.
     AP_GROUPINFO_FRAME("BUOYANCY", 15, SIM, buoyancy, 1, AP_PARAM_FRAME_SUB),
 
     // @Param: RATE_HZ
@@ -1827,6 +1827,11 @@ float SIM::measure_distance_at_angle_bf(const Location &location, float angle) c
     Vector2f ray_endpos_cm;
     if (!location2.get_vector_xy_from_origin_NE_cm(ray_endpos_cm)) {
         // should probably use SITL variables...
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+        if (rayfile != nullptr) {
+            fclose(rayfile);
+        }
+#endif
         return 0.0f;
     }
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL

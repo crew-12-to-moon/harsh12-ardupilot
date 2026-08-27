@@ -38,7 +38,6 @@
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <GCS_MAVLink/GCS.h>
 #include <AP_InertialSensor/AP_InertialSensor.h>
-#include <AP_CustomRotations/AP_CustomRotations.h>
 
 #include <AP_Mission/AP_Mission_config.h>
 #if AP_MISSION_ENABLED
@@ -175,35 +174,11 @@ const AP_Param::GroupInfo AP_AHRS::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("EKF_TYPE",  14, AP_AHRS, _ekf_type, HAL_AHRS_EKF_TYPE_DEFAULT),
 
-    // @Param: CUSTOM_ROLL
-    // @DisplayName: Board orientation roll offset
-    // @Description: Autopilot mounting position roll offset. Positive values = roll right, negative values = roll left. This parameter is only used when AHRS_ORIENTATION is set to CUSTOM.
-    // @Range: -180 180
-    // @Units: deg
-    // @Increment: 1
-    // @User: Advanced
+    // index 15 was CUSTOM_ROLL
 
-    // index 15
+    // index 16 was CUSTOM_PIT
 
-    // @Param: CUSTOM_PIT
-    // @DisplayName: Board orientation pitch offset
-    // @Description: Autopilot mounting position pitch offset. Positive values = pitch up, negative values = pitch down. This parameter is only used when AHRS_ORIENTATION is set to CUSTOM.
-    // @Range: -180 180
-    // @Units: deg
-    // @Increment: 1
-    // @User: Advanced
-
-    // index 16
-
-    // @Param: CUSTOM_YAW
-    // @DisplayName: Board orientation yaw offset
-    // @Description: Autopilot mounting position yaw offset. Positive values = yaw right, negative values = yaw left. This parameter is only used when AHRS_ORIENTATION is set to CUSTOM.
-    // @Range: -180 180
-    // @Units: deg
-    // @Increment: 1
-    // @User: Advanced
-
-    // index 17
+    // index 17 was CUSTOM_YAW
 
     // @Param: OPTIONS
     // @DisplayName: Optional AHRS behaviour
@@ -370,26 +345,6 @@ void AP_AHRS::init()
 
     // initialise this as no-change from the active type:
     last_active_ekf_type = state.active_EKF_type;
-
-#if AP_CUSTOMROTATIONS_ENABLED
-    // convert to new custom rotation
-    // PARAMETER_CONVERSION - Added: Nov-2021
-    if (_board_orientation == ROTATION_CUSTOM_OLD) {
-        _board_orientation.set_and_save(ROTATION_CUSTOM_1);
-        AP_Param::ConversionInfo info;
-        if (AP_Param::find_top_level_key_by_pointer(this, info.old_key)) {
-            info.type = AP_PARAM_FLOAT;
-            float rpy[3] = {};
-            AP_Float rpy_param;
-            for (info.old_group_element=15; info.old_group_element<=17; info.old_group_element++) {
-                if (AP_Param::find_old_parameter(&info, &rpy_param)) {
-                    rpy[info.old_group_element-15] = rpy_param.get();
-                }
-            }
-            AP::custom_rotations().convert(ROTATION_CUSTOM_1, rpy[0], rpy[1], rpy[2]);
-        }
-    }
-#endif  // AP_CUSTOMROTATIONS_ENABLED
 }
 
 // has_status returns information about the EKF health and

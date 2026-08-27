@@ -159,3 +159,16 @@ void ModeLoiter::update_target_altitude()
     }
     Mode::update_target_altitude();
 }
+
+/*
+  while standing by we are not the controller in command, so keep the loiter
+  centre under the aircraft. The centre is captured from current_loc when the
+  mode is entered, so a ride-along controller that entered LOITER somewhere
+  else would command a bank back to its own stale centre at takeover. The
+  accumulated loiter angle is meaningless for the same reason.
+ */
+void ModeLoiter::standby_reset()
+{
+    plane.do_loiter_at_location();
+    plane.loiter_angle_reset();
+}
