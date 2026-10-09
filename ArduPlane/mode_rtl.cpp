@@ -167,3 +167,13 @@ bool ModeRTL::switch_QRTL()
 }
 
 #endif  // HAL_QUADPLANE_ENABLED
+
+/*
+  re-anchor the cross-track origin while standing by. Only prev_WP_loc is
+  captured locally on entry; next_WP_loc is home or a rally point, which both
+  controllers derive identically, so it is deliberately left alone.
+ */
+void ModeRTL::standby_reset()
+{
+    plane.prev_WP_loc = plane.current_loc;
+}

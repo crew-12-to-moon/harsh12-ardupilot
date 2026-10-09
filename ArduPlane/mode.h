@@ -101,6 +101,10 @@ public:
     // Reset rate and steering and TECS controllers
     void reset_controllers();
 
+    // drop any navigation state this mode has accumulated. Called at
+    // 100Hz while standby is active, see standby.cpp
+    virtual void standby_reset() {}
+
     //
     // methods that sub classes should override to affect movement of the vehicle in this mode
     //
@@ -421,6 +425,8 @@ public:
     bool supports_fw_systemid() const override { return true; }
 #endif
 
+    void standby_reset() override;
+
 protected:
 
     bool _enter() override;
@@ -459,6 +465,8 @@ public:
     // does this mode support fixed wing systemid?
     bool supports_fw_systemid() const override { return true; }
 #endif
+
+    void standby_reset() override;
 
 protected:
 
@@ -533,6 +541,8 @@ public:
     bool does_auto_navigation() const override { return true; }
 
     bool does_auto_throttle() const override { return true; }
+
+    void standby_reset() override;
 
 protected:
 
@@ -680,6 +690,8 @@ public:
     void navigate() override;
 
     bool get_target_heading_cd(int32_t &target_heading) const;
+
+    void standby_reset() override;
 
     bool does_auto_throttle() const override { return true; }
 
